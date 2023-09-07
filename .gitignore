@@ -4,3 +4,4 @@ main/CmakeLists.txt
 CmakeLists.txt
 sdkconfig
 sdkconfig.old
+venv/
