@@ -1,7 +1,7 @@
-build/
-.vscode/
-main/CmakeLists.txt
-CmakeLists.txt
-sdkconfig
-sdkconfig.old
+Tarea1/build/
+Tarea1/.vscode/
+Tarea1/main/CmakeLists.txt
+Tarea1/CmakeLists.txt
+Tarea1/sdkconfig
+Tarea1/sdkconfig.old
 venv/
