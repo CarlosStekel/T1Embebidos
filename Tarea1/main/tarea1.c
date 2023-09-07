@@ -743,7 +743,7 @@ void app_main(void)
     chipid();
     initialization();
     check_initialization();
-    lowpowermode();
+    normalpowermode();
     internal_status();    
     printf("Comienza lectura\n\n");
     lectura();
