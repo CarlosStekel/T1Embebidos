@@ -1,0 +1,5 @@
+.build/
+.vscode/
+.main/CmakeLists.txt/
+.CmakeLists.txt/
+.sdkconfig/
