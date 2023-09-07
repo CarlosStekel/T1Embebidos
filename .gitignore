@@ -1,5 +1,6 @@
-.build/
+build/
 .vscode/
-.main/CmakeLists.txt/
-.CmakeLists.txt/
-.sdkconfig/
+main/CmakeLists.txt
+CmakeLists.txt
+sdkconfig
+sdkconfig.old
