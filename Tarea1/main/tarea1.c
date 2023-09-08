@@ -1,5 +1,12 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/uart.h"
 #include "driver/i2c.h"
 #include "sdkconfig.h"
 #include "math.h"
@@ -21,10 +28,71 @@
 #define ACK_VAL					0x0
 #define NACK_VAL				0x1
 
+#define BUF_SIZE (128) // buffer size
+#define TXD_PIN 1  // UART TX pin
+#define RXD_PIN 3  // UART RX pin
+#define UART_NUM UART_NUM_0   // UART port number
+#define BAUD_RATE 115200   // Baud rate
+
+#define REDIRECT_LOGS 1 // if redirect ESP log to another UART
+
 esp_err_t ret = ESP_OK;
 esp_err_t ret2 = ESP_OK;
 
 uint16_t val0[6];
+
+// ################################################# Comunicación #################################################
+// Function for sending things to UART1
+static int uart1_printf(const char *str, va_list ap) {
+    char *buf;
+    vasprintf(&buf, str, ap);
+    uart_write_bytes(UART_NUM_1, buf, strlen(buf));
+    free(buf);
+    return 0;
+}
+
+// Setup of UART connections 0 and 1, and try to redirect logs to UART1 if asked
+static void uart_setup() {
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+    };
+
+    uart_param_config(UART_NUM_0, &uart_config);
+    uart_param_config(UART_NUM_1, &uart_config);
+    uart_driver_install(UART_NUM_0, BUF_SIZE * 2, 0, 0, NULL, 0);
+    uart_driver_install(UART_NUM_1, BUF_SIZE * 2, 0, 0, NULL, 0);
+
+    // Redirect ESP log to UART1
+    if (REDIRECT_LOGS) {
+        esp_log_set_vprintf(uart1_printf);
+    }
+}
+
+// Write message through UART_num with an \0 at the end
+int serial_write(const char *msg, int len){
+
+    char *send_with_end = (char *)malloc(sizeof(char) * (len + 1));
+    memcpy(send_with_end, msg, len);
+    send_with_end[len] = '\0';
+    
+    int result = uart_write_bytes(UART_NUM, send_with_end, len+1);
+
+    free(send_with_end);
+
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Delay for 1 second
+    return result;
+}
+
+// Read UART_num for input with timeout of 1 sec
+int serial_read(char *buffer, int size){
+    int len = uart_read_bytes(UART_NUM, (uint8_t*)buffer, size, pdMS_TO_TICKS(1000));
+    return len;
+}
+// ################################################# Comunicación #################################################
 
 /*! @name  Global array that stores the configuration file of BMI270 */
 const uint8_t bmi270_config_file[] = {
@@ -537,7 +605,7 @@ void softreset(void)
         printf("\nError en softreset: %s \n",esp_err_to_name(ret));
     }
     else {
-         printf("\nSoftreset: OK\n\n");
+        uart_write_bytes(UART_NUM,"Softreset: OK\0",14);
     }
     
 }
@@ -694,6 +762,7 @@ void lectura(void)
     int bytes_data8 = 12;
     uint8_t reg_data = 0x0C, data_data8[bytes_data8];
     uint16_t acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z;
+    char dataResponse2[4];
 
     while (1)
     {
@@ -710,7 +779,7 @@ void lectura(void)
             //     printf("Lectura RAW: %2X \n",data_data8[i]);
             // }
             
-            acc_x = ((uint16_t) data_data8[1] << 8) | (uint16_t) data_data8[0];
+            acc_x = ((uint16_t) data_data8[1] << 8) |  (uint16_t) data_data8[0];
             acc_y = ((uint16_t) data_data8[3] << 8) | (uint16_t) data_data8[2];
             acc_z = ((uint16_t) data_data8[5] << 8) | (uint16_t) data_data8[4];
 
@@ -718,14 +787,32 @@ void lectura(void)
             gyr_y = ((uint16_t) data_data8[9] << 8) | (uint16_t) data_data8[8];
             gyr_z = ((uint16_t) data_data8[11] << 8) | (uint16_t) data_data8[10];
 
+            float data[6]; // Crea un arreglo de 6 elementos
+    
+            // Asigna los valores de las variables a los elementos del arreglo
+            data[0] = (float) 1.0;//(int16_t)acc_x*(78.4532/32768);
+            data[1] = (float) 2.0;//(int16_t)acc_y*(78.4532/32768);
+            data[2] = (float) 3.0;//(int16_t)acc_z*(78.4532/32768);
+            data[3] = (float) 4.0;//(int16_t)gyr_x*(34.90659/32768);
+            data[4] = (float) 5.0;//(int16_t)gyr_y*(34.90659/32768);
+            data[5] = (float) 6.0;//(int16_t)gyr_z*(34.90659/32768);
+            const char* dataToSend = (const char*)data;
+            int len = strlen(dataToSend);
+            serial_write(dataToSend, len);
 
-            printf("acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2\n", (int16_t)acc_x*(78.4532/32768), (int16_t)acc_y*(78.4532/32768), (int16_t)acc_z*(78.4532/32768));
-            printf("acc_x: %f g     acc_y: %f g     acc_z: %f g     gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768), (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
-            printf("acc_x: %f g     acc_y: %f g     acc_z: %f g  \n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768));    
-            printf("gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
-
-
-            
+            int rLen = serial_read(dataResponse2, 4);
+            if (rLen > 0)
+            {
+                if (strcmp(dataResponse2, "END") == 0)
+                {
+                    break;
+                }
+            }
+            // printf("acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2\n", (int16_t)acc_x*(78.4532/32768), (int16_t)acc_y*(78.4532/32768), (int16_t)acc_z*(78.4532/32768));
+            // printf("acc_x: %f g     acc_y: %f g     acc_z: %f g     gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768), (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
+            // printf("acc_x: %f g     acc_y: %f g     acc_z: %f g  \n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768));    
+            // printf("gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
+  
             if(ret != ESP_OK){
                 printf("Error lectura: %s \n",esp_err_to_name(ret));
             }
@@ -735,9 +822,26 @@ void lectura(void)
 
 }
 
-
 void app_main(void)
 {
+    uart_setup(); // Uart setup
+
+    // Waiting for an BEGIN to initialize data sending
+    char dataResponse1[6];
+    printf("Beginning initialization... \n");
+    while (1)
+    {
+        int rLen = serial_read(dataResponse1, 6);
+        if (rLen > 0)
+        {
+            if (strcmp(dataResponse1, "BEGIN") == 0)
+            {
+                uart_write_bytes(UART_NUM,"OK\0",3);
+                break;
+            }
+        }
+    }
+    
     ESP_ERROR_CHECK(bmi_init());
     softreset();
     chipid();

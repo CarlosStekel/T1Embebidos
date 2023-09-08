@@ -18,7 +18,7 @@ def receive_response():
 
 def receive_data():
     data = receive_response()
-    data = unpack("fff", data)
+    data = unpack("ffffff", data)
     print(f'Received: {data}')
     return data
 
@@ -43,7 +43,7 @@ while True:
             counter += 1
             print(counter)
         finally:
-            if counter == 10:
+            if counter == 20:
                 print('Lecturas listas!')
                 break
 
