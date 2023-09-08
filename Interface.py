@@ -35,9 +35,11 @@ counter = 0
 while True:
     if ser.in_waiting > 0:
         try:
-            message = receive_data()
-        except:
-            print('Error en leer mensaje')
+            message = receive_response()
+            print(message)
+            print(f'Received: {unpack("ffff", message)}')
+        except Exception as e:
+            print(e)
             continue
         else: 
             counter += 1

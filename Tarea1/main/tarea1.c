@@ -790,12 +790,12 @@ void lectura(void)
             float data[6]; // Crea un arreglo de 6 elementos
     
             // Asigna los valores de las variables a los elementos del arreglo
-            data[0] = (float) 1.0;//(int16_t)acc_x*(78.4532/32768);
-            data[1] = (float) 2.0;//(int16_t)acc_y*(78.4532/32768);
-            data[2] = (float) 3.0;//(int16_t)acc_z*(78.4532/32768);
-            data[3] = (float) 4.0;//(int16_t)gyr_x*(34.90659/32768);
-            data[4] = (float) 5.0;//(int16_t)gyr_y*(34.90659/32768);
-            data[5] = (float) 6.0;//(int16_t)gyr_z*(34.90659/32768);
+            data[0] = (float) ((int16_t)acc_x*(78.4532/32768));
+            data[1] = (float) ((int16_t)acc_y*(78.4532/32768));
+            data[2] = (float) ((int16_t)acc_z*(78.4532/32768));
+            data[3] = (float) ((int16_t)gyr_x*(34.90659/32768));
+            data[4] = (float) ((int16_t)gyr_y*(34.90659/32768));
+            data[5] = (float) ((int16_t)gyr_z*(34.90659/32768));
             const char* dataToSend = (const char*)data;
             int len = strlen(dataToSend);
             serial_write(dataToSend, len);
