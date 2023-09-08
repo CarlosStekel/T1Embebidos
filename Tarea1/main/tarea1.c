@@ -798,7 +798,7 @@ void lectura(void)
             data[5] = (float) ((int16_t)gyr_z*(34.90659/32768));
             const char* dataToSend = (const char*)data;
             int len = strlen(dataToSend);
-            serial_write(dataToSend, len);
+            serial_write((const char*)data, sizeof(data));
 
             int rLen = serial_read(dataResponse2, 4);
             if (rLen > 0)

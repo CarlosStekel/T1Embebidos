@@ -37,7 +37,7 @@ while True:
         try:
             message = receive_response()
             print(message)
-            print(f'Received: {unpack("ffff", message)}')
+            print(f'Received: {unpack("ffffff", message)}')
         except Exception as e:
             print(e)
             continue
