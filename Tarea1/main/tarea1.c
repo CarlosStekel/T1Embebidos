@@ -34,7 +34,7 @@
 #define UART_NUM UART_NUM_0   // UART port number
 #define BAUD_RATE 115200   // Baud rate
 
-#define REDIRECT_LOGS 1 // if redirect ESP log to another UART
+#define REDIRECT_LOGS 0 // if redirect ESP log to another UART
 
 esp_err_t ret = ESP_OK;
 esp_err_t ret2 = ESP_OK;
@@ -92,7 +92,32 @@ int serial_read(char *buffer, int size){
     int len = uart_read_bytes(UART_NUM, (uint8_t*)buffer, size, pdMS_TO_TICKS(1000));
     return len;
 }
-// ################################################# Comunicación #################################################
+
+// ################################################# Fourier #################################################
+typedef struct {
+    float real;
+    float imag;
+} complejo;
+
+void calcularFFT(float *entrada_amplitud_tiempo, int longitud, float frecuencia_muestreo, complejo *salida_fft) {
+    for (int k = 0; k < longitud; k++) {
+        salida_fft[k].real = 0;
+        salida_fft[k].imag = 0;
+
+        for (int n = 0; n < longitud; n++) {
+            float angulo = 2 * M_PI * k * n / longitud;
+            float cos_angulo = cos(angulo);
+            float sin_angulo = -sin(angulo);
+
+            salida_fft[k].real += entrada_amplitud_tiempo[n] * cos_angulo;
+            salida_fft[k].imag += entrada_amplitud_tiempo[n] * sin_angulo;
+        }
+    }
+    for (int i = 0; i < longitud; i++) {
+        salida_fft[i].real /= longitud;
+        salida_fft[i].imag /= longitud;
+    }
+}
 
 /*! @name  Global array that stores the configuration file of BMI270 */
 const uint8_t bmi270_config_file[] = {
@@ -796,8 +821,7 @@ void lectura(void)
             data[3] = (float) ((int16_t)gyr_x*(34.90659/32768));
             data[4] = (float) ((int16_t)gyr_y*(34.90659/32768));
             data[5] = (float) ((int16_t)gyr_z*(34.90659/32768));
-            const char* dataToSend = (const char*)data;
-            int len = strlen(dataToSend);
+
             serial_write((const char*)data, sizeof(data));
 
             int rLen = serial_read(dataResponse2, 4);
@@ -822,6 +846,85 @@ void lectura(void)
 
 }
 
+void mandarPaquete(void)
+{
+    uint8_t reg_intstatus=0x03, tmp;
+    int bytes_data8 = 12;
+    uint8_t reg_data = 0x0C, data_data8[bytes_data8];
+    float acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z;
+    char dataResponse2[4];
+    float ACC_X[100], ACC_Y[100], ACC_Z[100];
+    float RMSX = 0;
+    float RMSY = 0;
+    float RMSZ = 0;
+    int i;
+
+    for(int j = 0; j < 10; j++) 
+    {
+        i = 0;
+        while (i < 100)
+        {
+            bmi_read(I2C_NUM_0, &reg_intstatus, &tmp,1);
+            // printf("Init_status.0: %x - mask: %x \n", tmp, (tmp & 0b10000000));
+            //ESP_LOGI("leturabmi", "acc_data_ready: %x - mask(80): %x \n", tmp, (tmp & 0b10000000));
+            
+            if ((tmp & 0b10000000) == 0x80)
+            { 
+                ret= bmi_read(I2C_NUM_0, &reg_data, (uint8_t*) data_data8, bytes_data8);
+                
+                acc_x = (float)((int16_t)(((uint16_t) data_data8[1] << 8) |  (uint16_t) data_data8[0])*(78.4532/32768));
+                acc_y = (float)((int16_t)(((uint16_t) data_data8[3] << 8) |  (uint16_t) data_data8[2])*(78.4532/32768));
+                acc_z = (float)((int16_t)(((uint16_t) data_data8[5] << 8) |  (uint16_t) data_data8[4])*(78.4532/32768));
+                
+                gyr_x = (float)((int16_t)(((uint16_t) data_data8[7] << 8) |  (uint16_t) data_data8[6])*(34.90659/32768));
+                gyr_y = (float)((int16_t)(((uint16_t) data_data8[9] << 8) |  (uint16_t) data_data8[8])*(34.90659/32768));
+                gyr_z = (float)((int16_t)(((uint16_t) data_data8[11] << 8) |  (uint16_t) data_data8[10])*(34.90659/32768));
+
+                ACC_X[i] = acc_x;
+                ACC_Y[i] = acc_y;
+                ACC_Z[i] = acc_z;
+
+                RMSX += pow(acc_x, 2);
+                RMSY += pow(acc_y, 2);
+                RMSZ += pow(acc_z, 2);
+
+                if(ret != ESP_OK){
+                    printf("Error lectura: %s \n",esp_err_to_name(ret));
+                }
+            }
+
+            i++;
+        }
+
+        RMSX = sqrt(RMSX/100);
+        RMSY = sqrt(RMSY/100);
+        RMSZ = sqrt(RMSZ/100);
+
+        complejo *FRX = (complejo *)malloc(sizeof(complejo) * 100);
+        complejo *FRY = (complejo *)malloc(sizeof(complejo) * 100);
+        complejo *FRZ = (complejo *)malloc(sizeof(complejo) * 100);
+
+        calcularFFT(ACC_X, 100, 1.0, FRX);
+        calcularFFT(ACC_Y, 100, 1.0, FRX);
+        calcularFFT(ACC_Z, 100, 1.0, FRX);
+
+        printf("ACCX: %.2f, ACCY: %.2f, ACCZ: %.2f, GYRX: %.2f, GYRY %.2f, GYRZ: %.2f, RMSX: %.2f, RMSY: %.2f, RMSZ: %.2f\n",
+        acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z, RMSX, RMSY, RMSZ);
+
+        for (int i = 0; i < 100; i++) {
+            printf("Salida FFTX[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            printf("Salida FFTY[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
+        }
+
+        for (int i = 0; i < 100; i++) {
+            printf("Salida FFTZ[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
+        }
+    }
+}
+
 void app_main(void)
 {
     uart_setup(); // Uart setup
@@ -829,18 +932,18 @@ void app_main(void)
     // Waiting for an BEGIN to initialize data sending
     char dataResponse1[6];
     printf("Beginning initialization... \n");
-    while (1)
-    {
-        int rLen = serial_read(dataResponse1, 6);
-        if (rLen > 0)
-        {
-            if (strcmp(dataResponse1, "BEGIN") == 0)
-            {
-                uart_write_bytes(UART_NUM,"OK\0",3);
-                break;
-            }
-        }
-    }
+    // while (1)
+    // {
+    //     int rLen = serial_read(dataResponse1, 6);
+    //     if (rLen > 0)
+    //     {
+    //         if (strcmp(dataResponse1, "BEGIN") == 0)
+    //         {
+    //             uart_write_bytes(UART_NUM,"OK\0",3);
+    //             break;
+    //         }
+    //     }
+    // }
     
     ESP_ERROR_CHECK(bmi_init());
     softreset();
@@ -850,6 +953,7 @@ void app_main(void)
     normalpowermode();
     internal_status();    
     printf("Comienza lectura\n\n");
-    lectura();
+    mandarPaquete();
+    //lectura();
     
 }
