@@ -94,6 +94,8 @@ int serial_read(char *buffer, int size){
 }
 
 // ################################################# Fourier #################################################
+float Frecuencia_Muestreo;
+
 typedef struct {
     float real;
     float imag;
@@ -117,6 +119,34 @@ void calcularFFT(float *entrada_amplitud_tiempo, int longitud, float frecuencia_
         salida_fft[i].real /= longitud;
         salida_fft[i].imag /= longitud;
     }
+}
+
+int calcularMin(float *peaks) {
+    int min = 0;
+    for(int i=1; i<5; i++) {
+        if (peaks[i]<peaks[min]) min = i;
+    }
+    return min;
+}
+
+// struct to send data serial
+
+typedef struct {
+    float acc[3];
+    float gyr[3];
+    float rms[3];
+    float peaks[3][5] ;
+    complejo fourier[3][100];
+} SerialData;
+
+int serialWriteStruct(SerialData *sd) {
+    int size = sizeof(SerialData);
+    unsigned char *byteArray = (unsigned char *) malloc(size+1);
+    memcpy(byteArray, sd, size);
+    byteArray[size] = '\0';
+    int result = uart_write_bytes(UART_NUM, byteArray, size);
+    free(byteArray);
+    return result;
 }
 
 /*! @name  Global array that stores the configuration file of BMI270 */
@@ -857,16 +887,22 @@ void mandarPaquete(void)
     float RMSX = 0;
     float RMSY = 0;
     float RMSZ = 0;
+    float RMSx;
+    float RMSy;
+    float RMSz;
+
     int i;
 
     for(int j = 0; j < 10; j++) 
     {
+        float peaksX[5] = {0,0,0,0,0};
+        float peaksY[5] = {0,0,0,0,0};
+        float peaksZ[5] = {0,0,0,0,0};
+
         i = 0;
         while (i < 100)
         {
             bmi_read(I2C_NUM_0, &reg_intstatus, &tmp,1);
-            // printf("Init_status.0: %x - mask: %x \n", tmp, (tmp & 0b10000000));
-            //ESP_LOGI("leturabmi", "acc_data_ready: %x - mask(80): %x \n", tmp, (tmp & 0b10000000));
             
             if ((tmp & 0b10000000) == 0x80)
             { 
@@ -888,6 +924,18 @@ void mandarPaquete(void)
                 RMSY += pow(acc_y, 2);
                 RMSZ += pow(acc_z, 2);
 
+                RMSx = sqrt(RMSX/(i+1));
+                RMSy = sqrt(RMSY/(i+1));
+                RMSz = sqrt(RMSZ/(i+1));
+
+                int indexX = calcularMin(peaksX);
+                int indexY = calcularMin(peaksY);
+                int indexZ = calcularMin(peaksZ);
+
+                if(peaksX[indexX] < RMSx) peaksX[indexX] = RMSx;
+                if(peaksY[indexY] < RMSy) peaksY[indexY] = RMSy;
+                if(peaksZ[indexZ] < RMSz) peaksZ[indexZ] = RMSz;
+
                 if(ret != ESP_OK){
                     printf("Error lectura: %s \n",esp_err_to_name(ret));
                 }
@@ -905,23 +953,47 @@ void mandarPaquete(void)
         complejo *FRZ = (complejo *)malloc(sizeof(complejo) * 100);
 
         calcularFFT(ACC_X, 100, 1.0, FRX);
-        calcularFFT(ACC_Y, 100, 1.0, FRX);
-        calcularFFT(ACC_Z, 100, 1.0, FRX);
+        calcularFFT(ACC_Y, 100, 1.0, FRY);
+        calcularFFT(ACC_Z, 100, 1.0, FRZ);
 
-        printf("ACCX: %.2f, ACCY: %.2f, ACCZ: %.2f, GYRX: %.2f, GYRY %.2f, GYRZ: %.2f, RMSX: %.2f, RMSY: %.2f, RMSZ: %.2f\n",
-        acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z, RMSX, RMSY, RMSZ);
-
-        for (int i = 0; i < 100; i++) {
-            printf("Salida FFTX[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
+        printf("haciendo el serialData\n");
+        SerialData *sd = (SerialData*) malloc(sizeof(SerialData));
+        sd->acc[0] = acc_x;
+        sd->acc[1] = acc_y;
+        sd->acc[2] = acc_z;
+        sd->gyr[0] = gyr_x;
+        sd->gyr[1] = gyr_y;
+        sd->gyr[2] = gyr_z;
+        sd->rms[0] = RMSX;
+        sd->rms[1] = RMSY;
+        sd->rms[2] = RMSZ;
+        for (int i = 0; i < 5; i++) {
+            sd->peaks[0][i] = peaksX[i];
+            sd->peaks[1][i] = peaksY[i];
+            sd->peaks[2][i] = peaksZ[i];
         }
-
         for (int i = 0; i < 100; i++) {
-            printf("Salida FFTY[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
+            sd->fourier[0][i] = FRX[i];
+            sd->fourier[1][i] = FRY[i];
+            sd->fourier[2][i] = FRZ[i];
         }
+        free(FRX);
+        free(FRY);
+        free(FRZ);
+        //MANDAR LA W*A                                                                                                             wea
+        serialWriteStruct(sd);
+        // printf("printeando serialData\n");
+        // printf("ACCX: %.2f, ACCY: %.2f, ACCZ: %.2f, GYRX: %.2f, GYRY %.2f, GYRZ: %.2f, RMSX: %.2f, RMSY: %.2f, RMSZ: %.2f\n",
+        // sd->acc[0], sd->acc[1], sd->acc[2], sd->gyr[0], sd->gyr[1], sd->gyr[2], sd->rms[0], sd->rms[1], sd->rms[2]);
 
-        for (int i = 0; i < 100; i++) {
-            printf("Salida FFTZ[%d] = %.2f + %.2fi\n", i, FRX[i].real, FRX[i].imag);
-        }
+        // printf("PeaksX: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[0][0], sd->peaks[0][1], sd->peaks[0][2],sd->peaks[0][3], sd->peaks[0][4]);
+        // printf("PeaksY: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[1][0], sd->peaks[1][1], sd->peaks[1][2],sd->peaks[1][3], sd->peaks[1][4]);
+        // printf("PeaksZ: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[2][0], sd->peaks[2][1], sd->peaks[2][2],sd->peaks[2][3], sd->peaks[2][4]);
+        // printf("\n\n");
+        // printf("Salida FFTX[%d] = %.2f + %.2fi\n", 4, sd->fourier[0][4].real, sd->fourier[0][4].imag);
+        // printf("Salida FFTY[%d] = %.2f + %.2fi\n", 4, sd->fourier[1][4].real, sd->fourier[1][4].imag);
+        // printf("Salida FFTZ[%d] = %.2f + %.2fi\n", 4, sd->fourier[2][4].real, sd->fourier[2][4].imag);
+        free(sd);
     }
 }
 
@@ -953,6 +1025,12 @@ void app_main(void)
     normalpowermode();
     internal_status();    
     printf("Comienza lectura\n\n");
+    mandarPaquete();
+    printf("cambiando a Low Power mode\n\n");
+    lowpowermode();
+    mandarPaquete();
+    printf("cambiando a Performance Power mode\n\n");
+    performancepowermode();
     mandarPaquete();
     //lectura();
     
