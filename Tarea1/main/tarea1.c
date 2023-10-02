@@ -36,10 +36,14 @@
 
 #define REDIRECT_LOGS 0 // if redirect ESP log to another UART
 
+#define INF_NEG (-3.40282347e38)
+
 esp_err_t ret = ESP_OK;
 esp_err_t ret2 = ESP_OK;
 
 uint16_t val0[6];
+float frecuenciaMuestreoAcc = 1;
+float frecuenciaMuestreoGyr = 1;
 
 // ################################################# Comunicación #################################################
 // Function for sending things to UART1
@@ -93,6 +97,25 @@ int serial_read(char *buffer, int size){
     return len;
 }
 
+void send_data(float* data, int size)
+{
+    int length = (1 + 13) * size + 1;
+
+    char *s = malloc(length);
+    
+    // Ahora se escribe el string en el buffer
+    sprintf(s, "%.6f", data[0]);
+    for (int i = 1; i < size; i++) {
+        sprintf(s + strlen(s), " %.6f", data[i]);
+    }
+    sprintf(s + strlen(s), "%c", '\0');
+
+    // Se envia el string
+    const char* dataToSend = (const char*)s;
+    uart_write_bytes(UART_NUM, dataToSend, strlen(dataToSend)+1);
+    free(s);
+}
+
 // ################################################# Fourier #################################################
 float Frecuencia_Muestreo;
 
@@ -129,6 +152,23 @@ int calcularMin(float *peaks) {
     return min;
 }
 
+float calcularRMS(float arreglo[], int longitud) {
+    float sumaCuadrados = 0.0;
+
+    // Calcula la suma de los cuadrados de los elementos del arreglo
+    for (int i = 0; i < longitud; i++) {
+        sumaCuadrados += arreglo[i] * arreglo[i];
+    }
+
+    // Calcula la media de los cuadrados
+    float mediaCuadrados = sumaCuadrados / longitud;
+
+    // Calcula la raíz cuadrada de la media de los cuadrados para obtener el RMS
+    float rms = sqrt(mediaCuadrados);
+
+    return rms;
+}
+
 // struct to send data serial
 
 typedef struct {
@@ -139,8 +179,15 @@ typedef struct {
     complejo fourier[3][100];
 } SerialData;
 
-int serialWriteStruct(SerialData *sd) {
-    int size = sizeof(SerialData);
+typedef struct{
+    float acc[3];
+    float gyr[3];
+    float rms[3];
+} Prueba;
+
+int serialWriteStruct(Prueba *sd) {
+    //int size = sizeof(SerialData);
+    int size = sizeof(Prueba);
     unsigned char *byteArray = (unsigned char *) malloc(size+1);
     memcpy(byteArray, sd, size);
     byteArray[size] = '\0';
@@ -683,6 +730,9 @@ void powermode(void)
     }
 }
 
+
+
+
 void initialization(void){
 
     uint8_t reg_pwr_conf_advpowersave=0x7C, val_pwr_conf_advpowersave=0x00;
@@ -752,6 +802,226 @@ void check_initialization(void){
     }
 }
 
+int estaEnLista(uint8_t valor, uint8_t lista[], size_t tam) {
+    for(size_t i = 0; i < tam; i++) {
+        if (lista[i] == valor) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void set_acc_odr(uint8_t odr_value) {
+    // Definimos constantes locales para la función
+    const uint8_t ACC_ODR_MASK = 0x0F;  // Mascara para los bits 3 a 0
+    const uint8_t REG_ACC_CONF = 0x40;
+
+    uint8_t current_val;
+
+    uint8_t valsPermitidos[] = {0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c};
+    
+    int permiso = estaEnLista(odr_value, valsPermitidos, 12);
+
+    if (permiso == 0){
+        return;
+    }
+    else {
+        if (odr_value == 0x01){
+            frecuenciaMuestreoAcc = (25/32);
+        }
+        if (odr_value == 0x02){
+            frecuenciaMuestreoAcc = (25/16);
+        }
+        if (odr_value == 0x03){
+            frecuenciaMuestreoAcc = (25/8);
+        }
+        if (odr_value == 0x04){
+            frecuenciaMuestreoAcc = (25/4);
+        }
+        if (odr_value == 0x05){
+            frecuenciaMuestreoAcc = (25/2);
+        }
+        if (odr_value == 0x06){
+            frecuenciaMuestreoAcc = (25);
+        }
+        if (odr_value == 0x07){
+            frecuenciaMuestreoAcc = (50);
+        }
+        if (odr_value == 0x08){
+            frecuenciaMuestreoAcc = (100);
+        }
+        if (odr_value == 0x09){
+            frecuenciaMuestreoAcc = (200);
+        }
+        if (odr_value == 0x0a){
+            frecuenciaMuestreoAcc = (400);
+        }
+        if (odr_value == 0x0b){
+            frecuenciaMuestreoAcc = (800);
+        }
+        if (odr_value == 0x0c){
+            frecuenciaMuestreoAcc = (1600);
+        }
+    }
+
+    // Leemos el valor actual del registro
+    bmi_read(I2C_NUM_0, &REG_ACC_CONF, &current_val, 1);
+
+    // Limpiamos los bits 3 a 0 y luego colocamos el valor de odr_value en esos bits
+    current_val &= ~ACC_ODR_MASK;         // Limpia los bits 3 a 0
+    current_val |= (odr_value & ACC_ODR_MASK); // Coloca el valor de odr_value en los bits 3 a 0
+
+    // Escribimos el nuevo valor al registro
+    bmi_write(I2C_NUM_0, &REG_ACC_CONF, &current_val, 1);
+}
+
+void set_acc_range(uint8_t range_value) {
+    // Definimos constantes locales para la función
+    const uint8_t ACC_RANGE_MASK = 0x03;  // Mascara para los bits 1 a 0
+    const uint8_t REG_ACC_CONF = 0x41;
+
+    uint8_t current_val;
+
+    // Leemos el valor actual del registro
+    bmi_read(I2C_NUM_0, &REG_ACC_CONF, &current_val, 1);
+
+    // Limpiamos los bits 3 a 0 y luego colocamos el valor de odr_value en esos bits
+    current_val &= ~ACC_RANGE_MASK;         // Limpia los bits 3 a 0
+    current_val |= (range_value & ACC_RANGE_MASK); // Coloca el valor de odr_value en los bits 3 a 0
+
+    // Escribimos el nuevo valor al registro
+    bmi_write(I2C_NUM_0, &REG_ACC_CONF, &current_val, 1);
+}
+
+void set_gyr_odr(uint8_t odr_value) {
+    // Definimos constantes locales para la función
+    const uint8_t GYR_ODR_MASK = 0x0F;  // Mascara para los bits 3 a 0
+    const uint8_t REG_GYR_CONF = 0x42;
+
+    uint8_t current_val;
+
+    uint8_t valsPermitidos[] = {0x06,0x07,0x08,0x09,0x0a,0x0b,0x0c,0x0d};
+    
+    int permiso = estaEnLista(odr_value, valsPermitidos, 12);
+
+    if (permiso == 0){
+        return;
+    }
+    else {
+        if (odr_value == 0x06){
+            frecuenciaMuestreoGyr = (25);
+        }
+        if (odr_value == 0x07){
+            frecuenciaMuestreoGyr = (50);
+        }
+        if (odr_value == 0x08){
+            frecuenciaMuestreoGyr = (100);
+        }
+        if (odr_value == 0x09){
+            frecuenciaMuestreoGyr = (200);
+        }
+        if (odr_value == 0x0a){
+            frecuenciaMuestreoGyr = (400);
+        }
+        if (odr_value == 0x0b){
+            frecuenciaMuestreoGyr = (800);
+        }
+        if (odr_value == 0x0c){
+            frecuenciaMuestreoGyr = (1600);
+        }
+        if (odr_value == 0x0d){
+            frecuenciaMuestreoGyr = (3200);
+        }
+    }
+
+    // Leemos el valor actual del registro
+    bmi_read(I2C_NUM_0, &REG_GYR_CONF, &current_val, 1);
+
+    // Limpiamos los bits 3 a 0 y luego colocamos el valor de odr_value en esos bits
+    current_val &= ~GYR_ODR_MASK;         // Limpia los bits 3 a 0
+    current_val |= (odr_value & GYR_ODR_MASK); // Coloca el valor de odr_value en los bits 3 a 0
+
+    // Escribimos el nuevo valor al registro
+    bmi_write(I2C_NUM_0, &REG_GYR_CONF, &current_val, 1);
+}
+
+void set_gyr_range(uint8_t range_value) {
+    // Definimos constantes locales para la función
+    const uint8_t GYR_RANGE_MASK = 0x07;  // Mascara para los bits 2 a 0
+    const uint8_t REG_GYR_CONF = 0x43;
+
+    uint8_t current_val;
+
+    // Leemos el valor actual del registro
+    bmi_read(I2C_NUM_0, &REG_GYR_CONF, &current_val, 1);
+
+    // Limpiamos los bits 3 a 0 y luego colocamos el valor de odr_value en esos bits
+    current_val &= ~GYR_RANGE_MASK;         // Limpia los bits 3 a 0
+    current_val |= (range_value & GYR_RANGE_MASK); // Coloca el valor de odr_value en los bits 3 a 0
+
+    // Escribimos el nuevo valor al registro
+    bmi_write(I2C_NUM_0, &REG_GYR_CONF, &current_val, 1);
+}
+
+void suspend_mode(void) {
+    const uint8_t REG_7D = 0x7D;
+    const uint8_t MASK_7D = 0x06;
+    const uint8_t REG_7C = 0x7C;
+    const uint8_t MASK_7C = 0x01;
+
+    uint8_t current_val;
+
+    // Modificar el registro 0x7D
+    bmi_read(I2C_NUM_0, &REG_7D, &current_val, 1);
+    current_val &= ~MASK_7D;  // Limpia los bits 1 y 2 (pone en 0)
+    bmi_write(I2C_NUM_0, &REG_7D, &current_val, 1);
+
+    // Modificar el registro 0x7C
+    bmi_read(I2C_NUM_0, &REG_7C, &current_val, 1);
+    current_val |= MASK_7C;  // Establece el bit 0 a 1
+    bmi_write(I2C_NUM_0, &REG_7C, &current_val, 1);
+}
+
+
+void configuration_mode() {
+    const uint8_t REG_7D = 0x7D;
+    const uint8_t MASK_7D = 0x06;
+    const uint8_t REG_7C = 0x7C;
+    const uint8_t MASK_7C = 0x01;
+
+    uint8_t current_val;
+
+    // Modificar el registro 0x7D
+    bmi_read(I2C_NUM_0, &REG_7D, &current_val, 1);
+    current_val &= ~MASK_7D;  // Limpia los bits 1 y 2
+    bmi_write(I2C_NUM_0, &REG_7D, &current_val, 1);
+
+    // Modificar el registro 0x7C
+    bmi_read(I2C_NUM_0, &REG_7C, &current_val, 1);
+    current_val &= ~MASK_7C;  // Limpia el bit 0
+    bmi_write(I2C_NUM_0, &REG_7C, &current_val, 1);
+}
+
+void finish_configuration() {
+    const uint8_t REG_7D = 0x7D;
+    const uint8_t MASK_7D = 0x06;
+    const uint8_t REG_7C = 0x7C;
+    const uint8_t MASK_7C = 0x01;
+
+    uint8_t current_val;
+
+    // Modificar el registro 0x7D
+    bmi_read(I2C_NUM_0, &REG_7D, &current_val, 1);
+    current_val |= MASK_7D;  // Establece los bits 1 y 2 a 1
+    bmi_write(I2C_NUM_0, &REG_7D, &current_val, 1);
+
+    // Modificar el registro 0x7C
+    bmi_read(I2C_NUM_0, &REG_7C, &current_val, 1);
+    current_val |= MASK_7C;  // Establece el bit 0 a 1
+    bmi_write(I2C_NUM_0, &REG_7C, &current_val, 1);
+}
+
+
 void normalpowermode(void)
 {
     //PWR_CTRL: disable auxiliary sensor, gryo acc temp on
@@ -766,6 +1036,9 @@ void normalpowermode(void)
     bmi_write(I2C_NUM_0, &reg_acc_conf, &val_acc_conf,1);
     bmi_write(I2C_NUM_0, &reg_gyr_conf, &val_gyr_conf,1);
     bmi_write(I2C_NUM_0, &reg_pwr_conf, &val_pwr_conf,1);
+
+    frecuenciaMuestreoAcc = 200;
+    frecuenciaMuestreoGyr = 200;
 
     vTaskDelay(1000 /portTICK_RATE_MS );   
 
@@ -782,6 +1055,8 @@ void lowpowermode(void)
     bmi_write(I2C_NUM_0, &reg_acc_conf, &val_acc_conf,1);
     bmi_write(I2C_NUM_0, &reg_pwr_conf, &val_pwr_conf,1);
 
+    frecuenciaMuestreoAcc = 50;
+
     vTaskDelay(1000 /portTICK_RATE_MS );   
 }
 
@@ -797,6 +1072,9 @@ void performancepowermode(void)
     bmi_write(I2C_NUM_0, &reg_gyr_conf, &val_gyr_conf,1);
     bmi_write(I2C_NUM_0, &reg_pwr_conf, &val_pwr_conf,1);
 
+    frecuenciaMuestreoAcc = 100;
+    frecuenciaMuestreoGyr = 200;
+
     vTaskDelay(1000 /portTICK_RATE_MS );   
 }
 
@@ -811,190 +1089,195 @@ void internal_status(void)
 
 }
 
-void lectura(void)
+float magnitudFFT(complejo c) {
+    return sqrt((pow(c.real, 2)) + (pow(c.imag, 2)));
+}
+
+void mandarPaquete(int windowSize)
 {
     uint8_t reg_intstatus=0x03, tmp;
     int bytes_data8 = 12;
     uint8_t reg_data = 0x0C, data_data8[bytes_data8];
-    uint16_t acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z;
-    char dataResponse2[4];
+    float *ACC_X = (float *)malloc(sizeof(float) * windowSize);
+    float *ACC_Y = (float *)malloc(sizeof(float) * windowSize); 
+    float *ACC_Z = (float *)malloc(sizeof(float) * windowSize); 
+    float *GYR_X = (float *)malloc(sizeof(float) * windowSize); 
+    float *GYR_Y = (float *)malloc(sizeof(float) * windowSize); 
+    float *GYR_Z = (float *)malloc(sizeof(float) * windowSize);
+    
+    float *peaks_acc_x = (float *)malloc(sizeof(float) * 5);
+    float *peaks_acc_y = (float *)malloc(sizeof(float) * 5);
+    float *peaks_acc_z = (float *)malloc(sizeof(float) * 5);
+    float *peaks_gyr_x = (float *)malloc(sizeof(float) * 5);
+    float *peaks_gyr_y = (float *)malloc(sizeof(float) * 5);
+    float *peaks_gyr_z = (float *)malloc(sizeof(float) * 5);
 
+    int min_acc_x;
+    int min_acc_y;
+    int min_acc_z;
+    int min_gyr_y;
+    int min_gyr_z;
+    int min_gyr_x;
+    for (int i = 0; i<5; i++) {
+        peaks_acc_x[i] = INF_NEG;
+        peaks_acc_y[i] = INF_NEG;
+        peaks_acc_z[i] = INF_NEG;
+        peaks_gyr_x[i] = INF_NEG;
+        peaks_gyr_y[i] = INF_NEG;
+        peaks_gyr_z[i] = INF_NEG;
+    }
+
+    char dataResponse1[10];
     while (1)
     {
+        int rLen = serial_read(dataResponse1, 10);
+        if (rLen > 0)
+        {
+            if (strcmp(dataResponse1, "DATASTART") == 0)
+            {
+                break;
+            }
+        }
+    }
+    
+    for(int i = 0; i < windowSize; i++)
+    {
         bmi_read(I2C_NUM_0, &reg_intstatus, &tmp,1);
-        // printf("Init_status.0: %x - mask: %x \n", tmp, (tmp & 0b10000000));
-        //ESP_LOGI("leturabmi", "acc_data_ready: %x - mask(80): %x \n", tmp, (tmp & 0b10000000));
         
         if ((tmp & 0b10000000) == 0x80)
         { 
             ret= bmi_read(I2C_NUM_0, &reg_data, (uint8_t*) data_data8, bytes_data8);
 
-            // for (i=0; i<bytes_data8; i++)
-            // {
-            //     printf("Lectura RAW: %2X \n",data_data8[i]);
-            // }
+            ACC_X[i] = (float)((int16_t)(((uint16_t) data_data8[1] << 8) |  (uint16_t) data_data8[0])*(78.4532/32768));
+            ACC_Y[i] = (float)((int16_t)(((uint16_t) data_data8[3] << 8) |  (uint16_t) data_data8[2])*(78.4532/32768));
+            ACC_Z[i] = (float)((int16_t)(((uint16_t) data_data8[5] << 8) |  (uint16_t) data_data8[4])*(78.4532/32768));
             
-            acc_x = ((uint16_t) data_data8[1] << 8) |  (uint16_t) data_data8[0];
-            acc_y = ((uint16_t) data_data8[3] << 8) | (uint16_t) data_data8[2];
-            acc_z = ((uint16_t) data_data8[5] << 8) | (uint16_t) data_data8[4];
+            GYR_X[i] = (float)((int16_t)(((uint16_t) data_data8[7] << 8) |  (uint16_t) data_data8[6])*(34.90659/32768));
+            GYR_Y[i] = (float)((int16_t)(((uint16_t) data_data8[9] << 8) |  (uint16_t) data_data8[8])*(34.90659/32768));
+            GYR_Z[i] = (float)((int16_t)(((uint16_t) data_data8[11] << 8) |  (uint16_t) data_data8[10])*(34.90659/32768));
 
-            gyr_x = ((uint16_t) data_data8[7] << 8) | (uint16_t) data_data8[6];
-            gyr_y = ((uint16_t) data_data8[9] << 8) | (uint16_t) data_data8[8];
-            gyr_z = ((uint16_t) data_data8[11] << 8) | (uint16_t) data_data8[10];
+            min_acc_x = calcularMin(peaks_acc_x);
+            min_acc_y = calcularMin(peaks_acc_y);
+            min_acc_z = calcularMin(peaks_acc_z);
+            min_gyr_y = calcularMin(peaks_gyr_x);
+            min_gyr_z = calcularMin(peaks_gyr_y);
+            min_gyr_x = calcularMin(peaks_gyr_z);
 
-            float data[6]; // Crea un arreglo de 6 elementos
+            if (ACC_X[i] > peaks_acc_x[min_acc_x]) (peaks_acc_x[min_acc_x] = ACC_X[i]);
+            if (ACC_Y[i] > peaks_acc_y[min_acc_y]) (peaks_acc_y[min_acc_y] = ACC_Y[i]);
+            if (ACC_Z[i] > peaks_acc_z[min_acc_z]) (peaks_acc_z[min_acc_z] = ACC_Z[i]);
+            if (GYR_X[i] > peaks_gyr_x[min_gyr_x]) (peaks_gyr_x[min_gyr_x] = GYR_X[i]);
+            if (GYR_Y[i] > peaks_gyr_y[min_gyr_y]) (peaks_gyr_y[min_gyr_y] = GYR_Y[i]);
+            if (GYR_Z[i] > peaks_gyr_z[min_gyr_z]) (peaks_gyr_z[min_gyr_z] = GYR_Z[i]);
+
+        }
+    }
+
+    // FOURIER  
+    complejo *acc_fft_X = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(ACC_X, windowSize, frecuenciaMuestreoAcc, acc_fft_X);
+    float *magFFT_acc_X = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+       magFFT_acc_X[i] = magnitudFFT(acc_fft_X[i]); 
+    }
+    free(acc_fft_X);
     
-            // Asigna los valores de las variables a los elementos del arreglo
-            data[0] = (float) ((int16_t)acc_x*(78.4532/32768));
-            data[1] = (float) ((int16_t)acc_y*(78.4532/32768));
-            data[2] = (float) ((int16_t)acc_z*(78.4532/32768));
-            data[3] = (float) ((int16_t)gyr_x*(34.90659/32768));
-            data[4] = (float) ((int16_t)gyr_y*(34.90659/32768));
-            data[5] = (float) ((int16_t)gyr_z*(34.90659/32768));
-
-            serial_write((const char*)data, sizeof(data));
-
-            int rLen = serial_read(dataResponse2, 4);
-            if (rLen > 0)
-            {
-                if (strcmp(dataResponse2, "END") == 0)
-                {
-                    break;
-                }
-            }
-            // printf("acc_x: %f m/s2     acc_y: %f m/s2     acc_z: %f m/s2\n", (int16_t)acc_x*(78.4532/32768), (int16_t)acc_y*(78.4532/32768), (int16_t)acc_z*(78.4532/32768));
-            // printf("acc_x: %f g     acc_y: %f g     acc_z: %f g     gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768), (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
-            // printf("acc_x: %f g     acc_y: %f g     acc_z: %f g  \n", (int16_t)acc_x*(8.000/32768), (int16_t)acc_y*(8.000/32768), (int16_t)acc_z*(8.000/32768));    
-            // printf("gyr_x: %f rad/s     gyr_y: %f rad/s      gyr_z: %f rad/s\n", (int16_t)gyr_x*(34.90659/32768), (int16_t)gyr_y*(34.90659/32768), (int16_t)gyr_z*(34.90659/32768));
-  
-            if(ret != ESP_OK){
-                printf("Error lectura: %s \n",esp_err_to_name(ret));
-            }
-
-        }
+    complejo *acc_fft_Y = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(ACC_Y, windowSize, frecuenciaMuestreoAcc, acc_fft_Y);
+    float *magFFT_acc_Y = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+        magFFT_acc_Y[i] = magnitudFFT(acc_fft_Y[i]);
     }
-
-}
-
-void mandarPaquete(void)
-{
-    uint8_t reg_intstatus=0x03, tmp;
-    int bytes_data8 = 12;
-    uint8_t reg_data = 0x0C, data_data8[bytes_data8];
-    float acc_x, acc_y, acc_z, gyr_x, gyr_y, gyr_z;
-    char dataResponse2[4];
-    float ACC_X[100], ACC_Y[100], ACC_Z[100];
-    float RMSX = 0;
-    float RMSY = 0;
-    float RMSZ = 0;
-    float RMSx;
-    float RMSy;
-    float RMSz;
-
-    int i;
-
-    for(int j = 0; j < 10; j++) 
-    {
-        float peaksX[5] = {0,0,0,0,0};
-        float peaksY[5] = {0,0,0,0,0};
-        float peaksZ[5] = {0,0,0,0,0};
-
-        i = 0;
-        while (i < 100)
-        {
-            bmi_read(I2C_NUM_0, &reg_intstatus, &tmp,1);
-            
-            if ((tmp & 0b10000000) == 0x80)
-            { 
-                ret= bmi_read(I2C_NUM_0, &reg_data, (uint8_t*) data_data8, bytes_data8);
-                
-                acc_x = (float)((int16_t)(((uint16_t) data_data8[1] << 8) |  (uint16_t) data_data8[0])*(78.4532/32768));
-                acc_y = (float)((int16_t)(((uint16_t) data_data8[3] << 8) |  (uint16_t) data_data8[2])*(78.4532/32768));
-                acc_z = (float)((int16_t)(((uint16_t) data_data8[5] << 8) |  (uint16_t) data_data8[4])*(78.4532/32768));
-                
-                gyr_x = (float)((int16_t)(((uint16_t) data_data8[7] << 8) |  (uint16_t) data_data8[6])*(34.90659/32768));
-                gyr_y = (float)((int16_t)(((uint16_t) data_data8[9] << 8) |  (uint16_t) data_data8[8])*(34.90659/32768));
-                gyr_z = (float)((int16_t)(((uint16_t) data_data8[11] << 8) |  (uint16_t) data_data8[10])*(34.90659/32768));
-
-                ACC_X[i] = acc_x;
-                ACC_Y[i] = acc_y;
-                ACC_Z[i] = acc_z;
-
-                RMSX += pow(acc_x, 2);
-                RMSY += pow(acc_y, 2);
-                RMSZ += pow(acc_z, 2);
-
-                RMSx = sqrt(RMSX/(i+1));
-                RMSy = sqrt(RMSY/(i+1));
-                RMSz = sqrt(RMSZ/(i+1));
-
-                int indexX = calcularMin(peaksX);
-                int indexY = calcularMin(peaksY);
-                int indexZ = calcularMin(peaksZ);
-
-                if(peaksX[indexX] < RMSx) peaksX[indexX] = RMSx;
-                if(peaksY[indexY] < RMSy) peaksY[indexY] = RMSy;
-                if(peaksZ[indexZ] < RMSz) peaksZ[indexZ] = RMSz;
-
-                if(ret != ESP_OK){
-                    printf("Error lectura: %s \n",esp_err_to_name(ret));
-                }
-            }
-
-            i++;
-        }
-
-        RMSX = sqrt(RMSX/100);
-        RMSY = sqrt(RMSY/100);
-        RMSZ = sqrt(RMSZ/100);
-
-        complejo *FRX = (complejo *)malloc(sizeof(complejo) * 100);
-        complejo *FRY = (complejo *)malloc(sizeof(complejo) * 100);
-        complejo *FRZ = (complejo *)malloc(sizeof(complejo) * 100);
-
-        calcularFFT(ACC_X, 100, 1.0, FRX);
-        calcularFFT(ACC_Y, 100, 1.0, FRY);
-        calcularFFT(ACC_Z, 100, 1.0, FRZ);
-
-        printf("haciendo el serialData\n");
-        SerialData *sd = (SerialData*) malloc(sizeof(SerialData));
-        sd->acc[0] = acc_x;
-        sd->acc[1] = acc_y;
-        sd->acc[2] = acc_z;
-        sd->gyr[0] = gyr_x;
-        sd->gyr[1] = gyr_y;
-        sd->gyr[2] = gyr_z;
-        sd->rms[0] = RMSX;
-        sd->rms[1] = RMSY;
-        sd->rms[2] = RMSZ;
-        for (int i = 0; i < 5; i++) {
-            sd->peaks[0][i] = peaksX[i];
-            sd->peaks[1][i] = peaksY[i];
-            sd->peaks[2][i] = peaksZ[i];
-        }
-        for (int i = 0; i < 100; i++) {
-            sd->fourier[0][i] = FRX[i];
-            sd->fourier[1][i] = FRY[i];
-            sd->fourier[2][i] = FRZ[i];
-        }
-        free(FRX);
-        free(FRY);
-        free(FRZ);
-        //MANDAR LA W*A                                                                                                             wea
-        serialWriteStruct(sd);
-        // printf("printeando serialData\n");
-        // printf("ACCX: %.2f, ACCY: %.2f, ACCZ: %.2f, GYRX: %.2f, GYRY %.2f, GYRZ: %.2f, RMSX: %.2f, RMSY: %.2f, RMSZ: %.2f\n",
-        // sd->acc[0], sd->acc[1], sd->acc[2], sd->gyr[0], sd->gyr[1], sd->gyr[2], sd->rms[0], sd->rms[1], sd->rms[2]);
-
-        // printf("PeaksX: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[0][0], sd->peaks[0][1], sd->peaks[0][2],sd->peaks[0][3], sd->peaks[0][4]);
-        // printf("PeaksY: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[1][0], sd->peaks[1][1], sd->peaks[1][2],sd->peaks[1][3], sd->peaks[1][4]);
-        // printf("PeaksZ: [%.2f,%.2f,%.2f,%.2f,%.2f] ", sd->peaks[2][0], sd->peaks[2][1], sd->peaks[2][2],sd->peaks[2][3], sd->peaks[2][4]);
-        // printf("\n\n");
-        // printf("Salida FFTX[%d] = %.2f + %.2fi\n", 4, sd->fourier[0][4].real, sd->fourier[0][4].imag);
-        // printf("Salida FFTY[%d] = %.2f + %.2fi\n", 4, sd->fourier[1][4].real, sd->fourier[1][4].imag);
-        // printf("Salida FFTZ[%d] = %.2f + %.2fi\n", 4, sd->fourier[2][4].real, sd->fourier[2][4].imag);
-        free(sd);
+    free(acc_fft_Y);
+    
+    complejo *acc_fft_Z = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(ACC_Z, windowSize, frecuenciaMuestreoAcc, acc_fft_Z);
+    float *magFFT_acc_Z = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+       magFFT_acc_Z[i] = magnitudFFT(acc_fft_Z[i]); 
     }
+    free(acc_fft_Z);
+
+    complejo *gyr_fft_X = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(GYR_X, windowSize, frecuenciaMuestreoGyr, gyr_fft_X);
+    float *magFFT_gyr_X = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+       magFFT_gyr_X[i] = magnitudFFT(gyr_fft_X[i]); 
+    }
+    free(gyr_fft_X);
+
+    complejo *gyr_fft_Y = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(GYR_Y, windowSize, frecuenciaMuestreoGyr, gyr_fft_Y);
+    float *magFFT_gyr_Y = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+       magFFT_gyr_Y[i] = magnitudFFT(gyr_fft_Y[i]); 
+    }
+    free(gyr_fft_Y);
+
+    complejo *gyr_fft_Z = (complejo *)malloc(sizeof(complejo) * windowSize);
+    calcularFFT(GYR_Z, windowSize, frecuenciaMuestreoGyr, gyr_fft_Z);
+    float *magFFT_gyr_Z = (float *)malloc(sizeof(float)*windowSize);
+    for(int i = 0; i < windowSize; i++) {
+       magFFT_gyr_Z[i] = magnitudFFT(gyr_fft_Z[i]); 
+    }
+    free(gyr_fft_Z);
+
+    float *listaRMS = (float *)malloc(6 * sizeof(float));
+    listaRMS[0] = calcularRMS(ACC_X, windowSize);
+    listaRMS[1] = calcularRMS(ACC_Y, windowSize);
+    listaRMS[2] = calcularRMS(ACC_Z, windowSize);
+    listaRMS[3] = calcularRMS(GYR_X, windowSize);
+    listaRMS[4] = calcularRMS(GYR_Y, windowSize);
+    listaRMS[5] = calcularRMS(GYR_Z, windowSize);
+    
+    
+    
+
+    float *data = (float *)malloc(sizeof(float) * 12);
+    for(int i = 0; i < windowSize; i++)
+    {   
+        data[0] = ACC_X[i];
+        data[1] = ACC_Y[i];
+        data[2] = ACC_Z[i];
+        data[3] = GYR_X[i];
+        data[4] = GYR_Y[i];
+        data[5] = GYR_Z[i];
+        data[6] = magFFT_acc_X[i];
+        data[7] = magFFT_acc_Y[i];
+        data[8] = magFFT_acc_Z[i];
+        data[9] = magFFT_gyr_X[i];
+        data[10] = magFFT_gyr_Y[i];
+        data[11] = magFFT_gyr_Z[i];
+        send_data(data, 12);
+    }
+    send_data(peaks_acc_x, 5);
+    send_data(peaks_acc_y, 5);
+    send_data(peaks_acc_z, 5);
+    send_data(peaks_gyr_x, 5);
+    send_data(peaks_gyr_y, 5);
+    send_data(peaks_gyr_z, 5);
+    send_data(listaRMS, 6);
+    free(peaks_acc_x);
+    free(peaks_acc_y);
+    free(peaks_acc_z);
+    free(peaks_gyr_x);
+    free(peaks_gyr_y);
+    free(peaks_gyr_z);
+    free(data);
+    free(ACC_X);
+    free(ACC_Y);
+    free(ACC_Z);
+    free(GYR_X);
+    free(GYR_Y);
+    free(GYR_Z);
+    free(magFFT_acc_X);
+    free(magFFT_acc_Y);
+    free(magFFT_acc_Z);
+    free(magFFT_gyr_X);
+    free(magFFT_gyr_Y);
+    free(magFFT_gyr_Z);
+    free(listaRMS);
+
 }
 
 void app_main(void)
@@ -1004,34 +1287,125 @@ void app_main(void)
     // Waiting for an BEGIN to initialize data sending
     char dataResponse1[6];
     printf("Beginning initialization... \n");
-    // while (1)
-    // {
-    //     int rLen = serial_read(dataResponse1, 6);
-    //     if (rLen > 0)
-    //     {
-    //         if (strcmp(dataResponse1, "BEGIN") == 0)
-    //         {
-    //             uart_write_bytes(UART_NUM,"OK\0",3);
-    //             break;
-    //         }
-    //     }
-    // }
-    
     ESP_ERROR_CHECK(bmi_init());
     softreset();
     chipid();
     initialization();
     check_initialization();
     normalpowermode();
+    printf("Waiting Begin\n");
+    while (1)
+    {
+        int rLen = serial_read(dataResponse1, 6);
+        if (rLen > 0)
+        {
+            if (strcmp(dataResponse1, "BEGIN") == 0)
+            {
+                uart_write_bytes(UART_NUM,"OK\0",3);
+                break;
+            }
+        }
+    }
+    
+    int windowSize = 100;
+    set_acc_odr(0x0c);
+    char dataResponse2[6];
+    while (1)
+    {
+        int rLen = serial_read(dataResponse2, 6);
+        if (rLen > 0)
+        {
+            if (strcmp(dataResponse2, "START") == 0)
+            {
+                mandarPaquete(windowSize);
+            }
+            else if (strcmp(dataResponse2, "CONFI") == 0)
+            {
+                uart_write_bytes(UART_NUM,"LLEGO CONFIG\0", 13);
+                char config[9];
+
+                while (1) {
+                    int slen = serial_read(config, 9);
+
+                    if(slen > 0) {
+                        configuration_mode();
+                        char char_acc_odr[3];
+                        char_acc_odr[0] = config[0];
+                        char_acc_odr[1] = config[1];
+                        char_acc_odr[2] = '\0';
+                        uint8_t num_acc_odr = atoi(char_acc_odr);
+                        set_acc_odr(num_acc_odr);
+                        char char_acc_range[3];
+                        char_acc_range[0] = config[2];
+                        char_acc_range[1] = config[3];
+                        char_acc_range[2] = '\0';
+                        uint8_t num_acc_range = atoi(char_acc_range);
+                        set_acc_range(num_acc_range);
+                        char char_gyr_odr[3];
+                        char_gyr_odr[0] = config[4];
+                        char_gyr_odr[1] = config[5];
+                        char_gyr_odr[2] = '\0';
+                        uint8_t num_gyr_odr = atoi(char_gyr_odr);
+                        set_gyr_odr(num_gyr_odr);
+                        char char_gyr_range[3];
+                        char_gyr_range[0] = config[6];
+                        char_gyr_range[1] = config[7];
+                        char_gyr_range[2] = '\0';
+                        uint8_t num_gyr_range = atoi(char_gyr_range);
+                        set_gyr_range(num_gyr_range);
+
+                        uart_write_bytes(UART_NUM,"SUC CONFIG\0", 11);
+
+                        finish_configuration();
+                        break;
+                    }
+                } 
+            }
+            else if (strcmp(dataResponse2, "BREAK") == 0)
+            {
+                uart_write_bytes(UART_NUM,"LLEGO BREAK\0", 12);
+                break;
+            }
+            else if (strcmp(dataResponse2, "POWER") == 0) 
+            {
+                uart_write_bytes(UART_NUM,"LLEGO POWER\0", 12);
+                int s_len = 0;
+
+                char mode[6];
+                int correctly_changed = 1;
+                while (!s_len) {
+                    s_len = serial_read(mode, 6);
+                }
+                
+                if (strcmp(mode, "LOWER") == 0) {
+                    lowpowermode();
+                } else if (strcmp(mode, "PERFO") == 0) {
+                    performancepowermode();
+                } else if (strcmp(mode, "NORML") == 0) {
+                    normalpowermode();
+                } else if (strcmp(mode, "SUSPE") == 0) {
+                    suspend_mode();
+                } else {
+                    correctly_changed = 0;
+                }
+
+                if (correctly_changed) {
+                    uart_write_bytes(UART_NUM,"CHANGE READY\0", 14);
+                } else {
+                    uart_write_bytes(UART_NUM, "UNKNOWN MODE\0", 14);
+                }
+
+            }
+        }
+    }
     internal_status();    
-    printf("Comienza lectura\n\n");
-    mandarPaquete();
-    printf("cambiando a Low Power mode\n\n");
-    lowpowermode();
-    mandarPaquete();
-    printf("cambiando a Performance Power mode\n\n");
-    performancepowermode();
-    mandarPaquete();
+    // mandarPaquete();
+    // printf("cambiando a Low Power mode\n\n");
+    // lowpowermode();
+    // mandarPaquete();
+    // printf("cambiando a Performance Power mode\n\n");
+    // performancepowermode();
+    // mandarPaquete();
     //lectura();
     
 }
